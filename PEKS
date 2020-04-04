@@ -1,0 +1,299 @@
+package PEKS;
+
+import it.unisa.dia.gas.jpbc.*;
+import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
+import it.unisa.dia.gas.plaf.jpbc.pairing.a.TypeACurveGenerator;
+
+import java.io.UnsupportedEncodingException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Set;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map.Entry;
+
+import org.bson.Document;
+
+import com.mongodb.DBObject;
+import com.mongodb.client.FindIterable;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoCursor;
+import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.Filters;
+
+public class PEKS {
+
+	// static int SHA512_DIGEST_LENGTH =
+	// MessageDigest.getInstance("SHA-512").getDigestLength();
+
+	/* Apriv = α and Apub = [g, h=g^α] */
+	public class pubKey {
+		Element g;
+		Element pk;
+	}
+
+	public class key {
+		String documentKey;
+
+		Element sk;
+		pubKey publicKey;
+
+		public key(String documentKey) {
+			publicKey = new pubKey();
+			this.documentKey = documentKey;
+		}
+	}
+
+	/* PEKS = [A, B] i.e. A=g^r and B=H2(t) */
+	/*
+	 * public class peks { Element A; Element B; }
+	 */
+	/************************************/
+	public PairingParameters typeAParams;
+	public Pairing pairing;
+	public key key;
+	// public peks peks;
+	// public Element Tw;
+
+	private Mongo mongo;
+	private MongoCollection<Document> mc;
+
+	private String[] keyCol;
+	private String[] docuCol;
+	public String[] getKeyCol(){
+		return this.keyCol;
+	}
+
+	/************************************/
+	public PEKS(String documentKey) {
+		key = new key(documentKey);
+
+		this.init_pbc_param_pairing();
+		this.KeyGen();
+
+		/*
+		 * 连接上指定数据库的指定集合
+		 */
+		mongo = new Mongo();
+		MongoDatabase mdb = mongo.getDB("Cipher");
+		this.mc = mongo.getCollection(mdb, "PEKS");
+		this.mc.drop();
+
+		// peks = new peks();
+	}
+
+	/**
+	 * 随机生成文档和关键字集合
+	 * 
+	 * @param keyN
+	 * @param docuN
+	 */
+	public void Initial(int keyN, int docuN) {
+		keyCol = new String[keyN];
+		docuCol = new String[docuN];
+
+		for (int i = 0; i < keyCol.length; i++) {
+			keyCol[i] = Random.getRandomString(Random.getRandomInt(1, 50));
+		}
+		for (int i = 0; i < docuCol.length; i++) {
+			docuCol[i] = Random.getRandomString(Random.getRandomInt(1, docuCol.length));
+		}
+	}
+
+	public void insert() {
+		for (int i = 0; i < docuCol.length; i++) {
+			Document document = new Document();
+			String plainDocument = docuCol[i];
+			String plainKey = keyCol[Random.getRandomInt(0, keyCol.length - 1)];
+			 
+			/*
+			 * 文档加密并关键字公钥加密
+			 */
+			String cipherDocument = AES.AESEncode(this.key.documentKey, plainDocument);
+			Element[] cipherKey = this.Cipher(plainKey);
+			document.append("Document", cipherDocument);
+
+			document.append("KeyA", this.element2String(cipherKey[0]));
+			document.append("KeyB", this.element2String(cipherKey[1]));
+			//String tt="";
+			//Element ww = (Element)tt;
+			this.mc.insertOne(document);
+		}
+
+	}
+
+	public List<String> search(String word) {
+		List<String> docuFindRes = new ArrayList<>();
+		Element Tw = this.TrapDoor(word);
+		// this.Test(Tw, AB);
+		FindIterable<Document> ite = this.mc.find();
+		MongoCursor<Document> cursor = ite.iterator();
+
+		// 读取bucket中所有block
+		while (cursor.hasNext()) {
+			Element[] AB = new Element[2];
+			String cipherDocument = "";
+
+			Set<Entry<String, Object>> en = cursor.next().entrySet();
+			int tmpID = 0;// 存储读取到的BlockID
+			String tmpData = "";// 存储读取的实际BlockData
+			for (Entry<String, Object> e : en) {
+				if (e.getKey().matches("Document"))
+					cipherDocument = (String) e.getValue();
+				if (e.getKey().matches("KeyA"))
+					AB[0] = this.string2Element((String)e.getValue(), "G2");
+				if (e.getKey().matches("KeyB"))
+					AB[1] = this.string2Element((String)e.getValue(), "GT");
+			}
+			
+			if(this.Test(Tw, AB)) {
+				docuFindRes.add(AES.AESDecode(this.key.documentKey, cipherDocument));
+			}
+		}
+		
+		return docuFindRes;
+	}
+
+	/**
+	 * byte[]转为16进制
+	 *
+	 * @param bytes
+	 * @return
+	 */
+	private static String byte2Hex(byte[] bytes) {
+		StringBuffer stringBuffer = new StringBuffer();
+		for (int i = 0; i < bytes.length; i++) {
+			String temp = Integer.toHexString(bytes[i] & 0xFF);
+			if (temp.length() == 1) {
+				stringBuffer.append("0");
+			}
+			stringBuffer.append(temp);
+		}
+		return stringBuffer.toString();
+	}
+
+	private static byte[] hex2Byte(String hex) {
+		int m = 0, n = 0;
+		int byteLen = hex.length() / 2; // 每两个字符描述一个字节
+		byte[] ret = new byte[byteLen];
+		for (int i = 0; i < byteLen; i++) {
+			m = i * 2 + 1;
+			n = m + 1;
+			int intVal = Integer.decode("0x" + hex.substring(i * 2, m) + hex.substring(m, n));
+			ret[i] = Byte.valueOf((byte) intVal);
+		}
+		return ret;
+	}
+
+	byte[] SHA256(String word) {
+		// String encodeStr = "";
+		byte[] bytes = null;
+		try {
+			MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
+			messageDigest.update(word.getBytes("UTF-8"));
+			bytes = messageDigest.digest();
+			// encodeStr = byte2Hex(messageDigest.digest());
+		} catch (NoSuchAlgorithmException | UnsupportedEncodingException e) {
+			// TODO 自动生成的 catch 块
+			e.printStackTrace();
+		}
+		return bytes;
+		// return encodeStr;
+	}
+
+	void init_pbc_param_pairing() {
+		int rbits = 160, qbits = 512;
+		/**
+		 * 产生A类型的双线性群
+		 */
+		TypeACurveGenerator pg = new TypeACurveGenerator(rbits, qbits);
+		typeAParams = pg.generate();
+		/**
+		 * 初始化
+		 */
+		this.pairing = PairingFactory.getPairing(typeAParams);
+	}
+
+	void KeyGen() {
+		/* Private key - α */
+		key.sk = pairing.getZr().newRandomElement().getImmutable();
+		//System.out.println("key.sk" + "   " + key.sk);
+		/* Public key - Apub = [g, h=g^α] */
+		key.publicKey.g = pairing.getG2().newRandomElement().getImmutable();
+		//System.out.println("key.pub.g" + "   " + key.publicKey.g);
+		// Math.pow(a, b)
+		key.publicKey.pk = key.publicKey.g.duplicate().powZn(key.sk.duplicate());
+		//System.out.println("key.pub.pk" + "   " + key.publicKey.pk);
+	}
+
+	Element[] Cipher(String word) {
+		Element r = pairing.getZr().newRandomElement().getImmutable();
+
+		Element A = key.publicKey.g.duplicate().powZn(r.duplicate());
+
+		Element temp = key.publicKey.pk.duplicate().powZn(r.duplicate());
+
+		byte[] hash_value = SHA256(word);
+		Element B = pairing.pairing(temp.duplicate(),
+				pairing.getG1().newElement().setFromHash(hash_value, 0, hash_value.length));
+		return new Element[] { A, B };
+	}
+
+	Element TrapDoor(String word) {
+		byte[] hash_value = SHA256(word);
+
+		Element temp = pairing.getG1().newElement().setFromHash(hash_value, 0, hash_value.length);
+		Element Tw = temp.duplicate().powZn(key.sk.duplicate());
+		return Tw;
+	}
+
+	boolean Test(Element Tw, Element[] AB) {
+
+		Element temp = pairing.pairing(Tw.duplicate(), AB[0].duplicate());
+		return AB[1].equals(temp);
+	}
+	
+	public String element2String(Element e) {
+		return Base64.getEncoder().encodeToString(e.toBytes());
+	}
+	
+	public Element string2Element(String s, String type) {
+		byte[] b = Base64.getDecoder().decode(s);
+		if(type.equals("G1")) {
+			Element tmp = this.pairing.getG1().newRandomElement();
+			tmp.setFromBytes(b);
+			return tmp;
+		}
+		else if(type.equals("G2")) {
+			Element tmp = this.pairing.getG2().newRandomElement();
+			tmp.setFromBytes(b);
+			return tmp;
+		}
+		else {
+			Element tmp = this.pairing.getGT().newRandomElement();
+			tmp.setFromBytes(b);
+			return tmp;
+		}
+	}
+
+	public static void main(String[] args) {
+		// TODO 自动生成的方法存根
+
+		
+		PEKS ps = new PEKS(Random.getRandomString(Random.getRandomInt(1, 50)));
+		ps.Initial(20, 50);
+		
+		ps.insert();
+		
+		Element[] AB = ps.Cipher("dsds");
+		Element Tw = ps.TrapDoor("dsds");
+		Element[] AB4 = new Element[] {ps.string2Element(ps.element2String(AB[0]), "G2"), ps.string2Element(ps.element2String(AB[1]), "GT")};
+		
+		System.out.println(ps.Test(Tw, AB4));
+		//System.out.println(ps.string2Element(s,"G1"));
+		ps.search("ss");
+		
+		
+	}
+}
