@@ -15,12 +15,12 @@ import java.util.Map.Entry;
 
 import org.bson.Document;
 
-import com.mongodb.DBObject;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
-import com.mongodb.client.MongoDatabase;
-import com.mongodb.client.model.Filters;
+
+import Crypto.Random;
+import Crypto.AES;
 
 public class PEKS {
 
@@ -56,7 +56,7 @@ public class PEKS {
 	// public peks peks;
 	// public Element Tw;
 
-	private Mongo mongo;
+	//private Mongo mongo;
 	private MongoCollection<Document> mc;
 
 	private String[] keyCol;
@@ -75,10 +75,10 @@ public class PEKS {
 		/*
 		 * 连接上指定数据库的指定集合
 		 */
-		mongo = new Mongo();
-		MongoDatabase mdb = mongo.getDB("Cipher");
-		this.mc = mongo.getCollection(mdb, "PEKS");
-		this.mc.drop();
+		//mongo = new Mongo();
+		//MongoDatabase mdb = mongo.getDB("Cipher");
+		//this.mc = mongo.getCollection(mdb, "PEKS");
+		//this.mc.drop();
 
 		// peks = new peks();
 	}
